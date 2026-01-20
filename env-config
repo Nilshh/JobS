@@ -1,0 +1,28 @@
+# Job Aggregator Environment Configuration
+
+# ===== DATABASE =====
+DB_USER=jobuser
+DB_PASSWORD=secure_password_123
+DB_NAME=job_aggregator
+
+# ===== BACKEND =====
+DEBUG=False
+LOG_LEVEL=INFO
+
+# ===== FRONTEND =====
+REACT_APP_API_URL=http://localhost:8000
+
+# ===== OPTIONAL: JOB BOARD API KEYS =====
+# Trage deine API Keys hier ein, wenn du bezahlte APIs nutzen möchtest
+
+# Indeed API (Employer Partner Program)
+# INDEED_EMPLOYER_ID=
+# INDEED_API_KEY=
+
+# LinkedIn (nicht empfohlen, hat TOS restrictions)
+# LINKEDIN_API_KEY=
+
+# StepStone
+# STEPSTONE_API_KEY=
+
+# Weitere APIs können hier hinzugefügt werden

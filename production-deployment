@@ -1,0 +1,614 @@
+# 🚀 Produktions-Deployment Guide
+
+Dieses Dokument beschreibt, wie du die Job Aggregator App auf einem **produktiven Server** (z.B. VPS, Dedicated Server, Cloud) deployst.
+
+---
+
+## 📋 Voraussetzungen
+
+- Linux Server (Ubuntu 20.04+ empfohlen)
+- Docker & Docker Compose installiert
+- Domain Name (optional aber empfohlen)
+- SSL Certificate (Let's Encrypt - kostenlos)
+- SSH Zugang zum Server
+
+---
+
+## 🔧 Server Setup (Initial)
+
+### 1. SSH zum Server verbinden
+
+```bash
+ssh root@your-server-ip
+```
+
+### 2. System aktualisieren
+
+```bash
+apt-get update
+apt-get upgrade -y
+apt-get install -y curl wget git
+```
+
+### 3. Docker installieren
+
+```bash
+# Docker Repo hinzufügen
+curl -fsSL https://get.docker.com -o get-docker.sh
+sh get-docker.sh
+
+# Docker Compose installieren
+curl -L "https://github.com/docker/compose/releases/latest/download/docker-compose-$(uname -s)-$(uname -m)" -o /usr/local/bin/docker-compose
+chmod +x /usr/local/bin/docker-compose
+
+# Status prüfen
+docker --version
+docker-compose --version
+```
+
+### 4. Firewall konfigurieren (UFW)
+
+```bash
+# UFW aktivieren
+ufw enable
+
+# SSH erlauben
+ufw allow 22/tcp
+
+# HTTP/HTTPS erlauben
+ufw allow 80/tcp
+ufw allow 443/tcp
+
+# Status überprüfen
+ufw status
+```
+
+---
+
+## 📦 Projekt Deployment
+
+### 1. Projektverzeichnis erstellen
+
+```bash
+# Neuer User für die App (optional aber empfohlen)
+useradd -m -s /bin/bash jobapp
+su - jobapp
+
+# Projekt Clone
+cd ~
+git clone <dein-repo> job-aggregator
+cd job-aggregator
+
+# ODER manuell uploaden:
+# mkdir ~/job-aggregator
+# scp -r * root@server:/root/job-aggregator/
+```
+
+### 2. Environment für Produktion
+
+```bash
+# .env für Produktion erstellen
+cat > .env << 'EOF'
+# ===== DATABASE =====
+DB_USER=jobuser
+DB_PASSWORD=$(openssl rand -base64 32)  # Zufälliges starkes Passwort
+DB_NAME=job_aggregator
+
+# ===== BACKEND =====
+DEBUG=False
+LOG_LEVEL=WARNING  # Weniger Logging in Produktion
+
+# ===== FRONTEND =====
+# Mit Domain anpassen!
+REACT_APP_API_URL=https://your-domain.com/api
+EOF
+
+cat .env
+```
+
+### 3. Docker Compose für Produktion
+
+**Erstelle `docker-compose.prod.yml`:**
+
+```yaml
+version: '3.8'
+
+services:
+  db:
+    image: postgres:16-alpine
+    container_name: job_aggregator_db
+    environment:
+      POSTGRES_USER: ${DB_USER}
+      POSTGRES_PASSWORD: ${DB_PASSWORD}
+      POSTGRES_DB: ${DB_NAME}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./init.sql:/docker-entrypoint-initdb.d/init.sql
+    ports:
+      - "127.0.0.1:5432:5432"  # Nur localhost
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${DB_USER}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    restart: always
+    networks:
+      - job_network
+
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: job_aggregator_backend
+    environment:
+      DATABASE_URL: postgresql://${DB_USER}:${DB_PASSWORD}@db:5432/${DB_NAME}
+      DEBUG: False
+      LOG_LEVEL: WARNING
+    expose:
+      - "8000"
+    depends_on:
+      db:
+        condition: service_healthy
+    restart: always
+    networks:
+      - job_network
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    container_name: job_aggregator_frontend
+    environment:
+      REACT_APP_API_URL: ${REACT_APP_API_URL}
+    expose:
+      - "3000"
+    depends_on:
+      - backend
+    restart: always
+    networks:
+      - job_network
+
+  # Nginx Reverse Proxy
+  nginx:
+    image: nginx:alpine
+    container_name: job_aggregator_nginx
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./nginx.prod.conf:/etc/nginx/nginx.conf:ro
+      - ./ssl:/etc/nginx/ssl:ro
+      - ./certbot/conf:/etc/letsencrypt:ro
+    depends_on:
+      - frontend
+      - backend
+    restart: always
+    networks:
+      - job_network
+
+volumes:
+  postgres_data:
+    driver: local
+
+networks:
+  job_network:
+    driver: bridge
+```
+
+### 4. Nginx Konfiguration für Produktion
+
+**Erstelle `nginx.prod.conf`:**
+
+```nginx
+user nginx;
+worker_processes auto;
+error_log /var/log/nginx/error.log warn;
+pid /var/run/nginx.pid;
+
+events {
+    worker_connections 1024;
+}
+
+http {
+    include /etc/nginx/mime.types;
+    default_type application/octet-stream;
+
+    log_format main '$remote_addr - $remote_user [$time_local] "$request" '
+                    '$status $body_bytes_sent "$http_referer" '
+                    '"$http_user_agent" "$http_x_forwarded_for"';
+
+    access_log /var/log/nginx/access.log main;
+
+    sendfile on;
+    tcp_nopush on;
+    tcp_nodelay on;
+    keepalive_timeout 65;
+    types_hash_max_size 2048;
+    client_max_body_size 20M;
+
+    # Gzip compression
+    gzip on;
+    gzip_vary on;
+    gzip_proxied any;
+    gzip_comp_level 6;
+    gzip_types text/plain text/css text/xml text/javascript 
+               application/json application/javascript application/xml+rss 
+               application/rss+xml application/atom+xml image/svg+xml;
+
+    # Rate limiting
+    limit_req_zone $binary_remote_addr zone=general:10m rate=10r/s;
+    limit_req_zone $binary_remote_addr zone=api:10m rate=30r/s;
+
+    # Upstream backends
+    upstream frontend {
+        server frontend:3000;
+    }
+
+    upstream backend {
+        server backend:8000;
+    }
+
+    # HTTP → HTTPS redirect
+    server {
+        listen 80;
+        server_name _;
+        return 301 https://$host$request_uri;
+    }
+
+    # HTTPS Server
+    server {
+        listen 443 ssl http2;
+        server_name your-domain.com www.your-domain.com;
+
+        # SSL Certificates (Let's Encrypt)
+        ssl_certificate /etc/letsencrypt/live/your-domain.com/fullchain.pem;
+        ssl_certificate_key /etc/letsencrypt/live/your-domain.com/privkey.pem;
+
+        # SSL Security
+        ssl_protocols TLSv1.2 TLSv1.3;
+        ssl_ciphers HIGH:!aNULL:!MD5;
+        ssl_prefer_server_ciphers on;
+        ssl_session_cache shared:SSL:10m;
+        ssl_session_timeout 10m;
+
+        # Security Headers
+        add_header Strict-Transport-Security "max-age=31536000; includeSubDomains" always;
+        add_header X-Frame-Options "SAMEORIGIN" always;
+        add_header X-Content-Type-Options "nosniff" always;
+        add_header X-XSS-Protection "1; mode=block" always;
+
+        # Frontend (React App)
+        location / {
+            proxy_pass http://frontend;
+            proxy_http_version 1.1;
+            proxy_set_header Upgrade $http_upgrade;
+            proxy_set_header Connection 'upgrade';
+            proxy_set_header Host $host;
+            proxy_cache_bypass $http_upgrade;
+            proxy_set_header X-Real-IP $remote_addr;
+            proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+            proxy_set_header X-Forwarded-Proto $scheme;
+
+            limit_req zone=general burst=20 nodelay;
+        }
+
+        # API Backend
+        location /api/ {
+            proxy_pass http://backend;
+            proxy_http_version 1.1;
+            proxy_set_header Host $host;
+            proxy_set_header X-Real-IP $remote_addr;
+            proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+            proxy_set_header X-Forwarded-Proto $scheme;
+
+            # API Rate Limiting
+            limit_req zone=api burst=50 nodelay;
+
+            # Timeout für lange Requests
+            proxy_connect_timeout 60s;
+            proxy_send_timeout 60s;
+            proxy_read_timeout 60s;
+        }
+
+        # API Docs
+        location /docs {
+            proxy_pass http://backend/docs;
+            proxy_set_header Host $host;
+        }
+
+        location /redoc {
+            proxy_pass http://backend/redoc;
+            proxy_set_header Host $host;
+        }
+
+        # Health Check (nicht loggen)
+        location = /health {
+            access_log off;
+            proxy_pass http://backend;
+        }
+    }
+}
+```
+
+---
+
+## 🔐 SSL/HTTPS mit Let's Encrypt
+
+### 1. Certbot installieren
+
+```bash
+apt-get install -y certbot python3-certbot-nginx
+```
+
+### 2. Certificate anfordern
+
+```bash
+# Stoppe Nginx kurzzeitig
+docker-compose -f docker-compose.prod.yml down nginx
+
+# Certificate erstellen
+certbot certonly --standalone \
+  -d your-domain.com \
+  -d www.your-domain.com \
+  --email your-email@example.com \
+  --agree-tos
+
+# Nginx neu starten
+docker-compose -f docker-compose.prod.yml up -d nginx
+```
+
+### 3. Auto-Renewal konfigurieren
+
+```bash
+# Cron Job für Auto-Renewal
+(crontab -l; echo "0 3 * * * certbot renew --quiet && docker-compose -f /home/jobapp/job-aggregator/docker-compose.prod.yml restart nginx") | crontab -
+```
+
+---
+
+## 🚀 Deployment starten
+
+### 1. Services starten
+
+```bash
+docker-compose -f docker-compose.prod.yml up -d
+
+# Status überprüfen
+docker-compose -f docker-compose.prod.yml ps
+
+# Logs anschauen
+docker-compose -f docker-compose.prod.yml logs -f
+```
+
+### 2. Backup erstellen
+
+```bash
+# Datenbank-Backup Script
+cat > backup.sh << 'EOF'
+#!/bin/bash
+BACKUP_DIR="/home/jobapp/backups"
+DATE=$(date +%Y%m%d_%H%M%S)
+mkdir -p $BACKUP_DIR
+
+# Database backup
+docker-compose -f docker-compose.prod.yml exec -T db pg_dump \
+  -U jobuser job_aggregator > $BACKUP_DIR/db_$DATE.sql
+
+# Komprimieren
+gzip $BACKUP_DIR/db_$DATE.sql
+
+echo "Backup erstellt: $BACKUP_DIR/db_$DATE.sql.gz"
+EOF
+
+chmod +x backup.sh
+
+# Täglich um 2 Uhr Backup
+(crontab -l; echo "0 2 * * * /home/jobapp/job-aggregator/backup.sh") | crontab -
+```
+
+### 3. Monitoring Setup
+
+```bash
+# Docker Monitoring aktivieren
+docker-compose -f docker-compose.prod.yml stats
+
+# Logs zu Datei schreiben
+docker-compose -f docker-compose.prod.yml logs --no-log-prefix --timestamps >> logs/app.log 2>&1 &
+```
+
+---
+
+## 📊 Monitoring & Logging
+
+### 1. Container Health Checks
+
+```bash
+# Container Status anschauen
+docker ps --format "table {{.Names}}\t{{.Status}}"
+
+# Logs ausgeben
+docker-compose -f docker-compose.prod.yml logs backend
+docker-compose -f docker-compose.prod.yml logs frontend
+docker-compose -f docker-compose.prod.yml logs db
+```
+
+### 2. System Resources
+
+```bash
+# CPU/Memory Monitor
+watch docker stats
+
+# Disk Space
+df -h
+
+# Database Size
+docker-compose -f docker-compose.prod.yml exec db \
+  du -sh /var/lib/postgresql/data
+```
+
+### 3. Automated Monitoring (Optional)
+
+```bash
+# Health Check Script
+cat > health_check.sh << 'EOF'
+#!/bin/bash
+DOMAIN="your-domain.com"
+
+# Frontend Check
+if ! curl -fs https://$DOMAIN > /dev/null; then
+    echo "⚠️ Frontend down" | mail -s "Alert: Frontend" admin@example.com
+fi
+
+# API Check
+if ! curl -fs https://$DOMAIN/health > /dev/null; then
+    echo "⚠️ API down" | mail -s "Alert: API" admin@example.com
+fi
+
+# Database Check
+if ! docker-compose -f docker-compose.prod.yml exec -T db pg_isready -U jobuser; then
+    echo "⚠️ Database down" | mail -s "Alert: Database" admin@example.com
+fi
+EOF
+
+# Jede 5 Minuten ausführen
+(crontab -l; echo "*/5 * * * * /home/jobapp/job-aggregator/health_check.sh") | crontab -
+```
+
+---
+
+## 🔄 Updates & Maintenance
+
+### 1. Anwendung updaten
+
+```bash
+# Repo pullen
+git pull origin main
+
+# Services neu bauen und restarten
+docker-compose -f docker-compose.prod.yml build
+docker-compose -f docker-compose.prod.yml up -d
+
+# Alte Images aufräumen
+docker image prune -a -f
+```
+
+### 2. Datenbank Migration
+
+```bash
+# Bei Schema Änderungen
+docker-compose -f docker-compose.prod.yml exec backend \
+  alembic upgrade head
+```
+
+### 3. Sicherheits-Updates
+
+```bash
+# System updaten
+apt-get update && apt-get upgrade -y
+
+# Docker Images updaten
+docker-compose -f docker-compose.prod.yml pull
+docker-compose -f docker-compose.prod.yml up -d
+```
+
+---
+
+## 🛡️ Sicherheitschecklist
+
+- [ ] `.env` hat starke DB_PASSWORD
+- [ ] DEBUG=False gesetzt
+- [ ] SSL/HTTPS aktiviert
+- [ ] Firewall konfiguriert
+- [ ] SSH Key-Only Auth (kein Passwort)
+- [ ] Regelmäßige Backups konfiguriert
+- [ ] Rate Limiting aktiv (nginx.conf)
+- [ ] Security Headers gesetzt
+- [ ] Docker Logs rotiert
+- [ ] Database Backups getestet
+
+---
+
+## 📋 Performance Tuning
+
+### Backend Optionen
+
+```yaml
+# docker-compose.prod.yml - Backend erweitern:
+backend:
+  # ... vorhandene config ...
+  environment:
+    # Connection Pool Tuning
+    DB_POOL_SIZE=20
+    DB_MAX_OVERFLOW=40
+    # Worker Tuning
+    WORKERS=4  # CPU Cores
+```
+
+### Frontend Caching
+
+```nginx
+# nginx.prod.conf - Static Asset Caching:
+location ~* \.(js|css|png|jpg|jpeg|gif|ico|svg|woff|woff2|ttf|eot)$ {
+    expires 1y;
+    add_header Cache-Control "public, immutable";
+}
+```
+
+---
+
+## 🆘 Troubleshooting
+
+### Container startet nicht
+
+```bash
+# Logs anschauen
+docker-compose -f docker-compose.prod.yml logs backend
+
+# Container neu bauen
+docker-compose -f docker-compose.prod.yml build --no-cache backend
+docker-compose -f docker-compose.prod.yml up -d backend
+```
+
+### HTTPS Fehler
+
+```bash
+# Certificate Status prüfen
+certbot certificates
+
+# Manuelle Erneuerung
+certbot renew --force-renewal
+
+# Nginx Config testen
+docker exec job_aggregator_nginx nginx -t
+```
+
+### Database Probleme
+
+```bash
+# In DB Shell
+docker-compose -f docker-compose.prod.yml exec db psql -U jobuser
+
+# Query ausführen
+SELECT COUNT(*) FROM jobs;
+
+# Backup/Restore
+docker-compose -f docker-compose.prod.yml exec -T db pg_dump -U jobuser job_aggregator > backup.sql
+```
+
+---
+
+## 📞 Support & Wartung
+
+- **Logs**: `docker-compose logs -f`
+- **Health**: `curl https://your-domain.com/health`
+- **API Docs**: `https://your-domain.com/docs`
+- **Monitoring**: `docker stats`
+
+---
+
+**Viel Erfolg mit deinem Produktions-Deployment! 🚀**

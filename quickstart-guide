@@ -1,0 +1,105 @@
+# 🚀 Job Aggregator - Quick Start (5 Minuten)
+
+## Minimaler Setup für schnellen Start
+
+### 1. Docker und Docker Compose installieren
+
+**macOS:**
+```bash
+brew install docker docker-compose
+# oder Docker Desktop installieren
+```
+
+**Linux (Ubuntu):**
+```bash
+sudo apt-get install docker.io docker-compose
+sudo usermod -aG docker $USER
+```
+
+**Windows:**
+- Docker Desktop für Windows herunterladen und installieren
+
+### 2. Projekt Setup (2 min)
+
+```bash
+# Verzeichnis erstellen
+mkdir job-aggregator && cd job-aggregator
+
+# Alle Dateien von oben herunterladen/kopieren in richtige Ordner:
+# - docker-compose.yml → ./
+# - .env → ./
+# - init.sql → ./
+# - backend/* → ./backend/
+# - frontend/* → ./frontend/
+
+# .env anpassen (optional, für Produktion wichtig!)
+nano .env
+```
+
+### 3. Docker Compose Starten (2 min)
+
+```bash
+docker-compose up -d
+
+# Status überprüfen
+docker-compose ps
+
+# Logs anschauen
+docker-compose logs -f
+```
+
+### 4. Anwendung Öffnen (30 sek)
+
+**Browser öffnen:**
+- Frontend: http://localhost:3000
+- API Docs: http://localhost:8000/docs
+
+## ✅ Das war's!
+
+Deine Job Aggregator WebApp läuft jetzt! 🎉
+
+### Erste Schritte in der App:
+
+1. **Klick auf "Neue Suche"**
+2. **Ausfüllen:**
+   - Job Titel: "Python Developer"
+   - Ort: "Berlin"
+   - Zeit: "09:00"
+3. **"Suche speichern" klicken**
+4. **"Jetzt Suchen" zum manuellen Triggern oder bis 09:00 Uhr warten**
+
+## 🛑 Schnelle Commands
+
+```bash
+# Services anhalten
+docker-compose stop
+
+# Services wieder starten
+docker-compose start
+
+# Logs in Echtzeit
+docker-compose logs -f
+
+# In einen Container gehen
+docker-compose exec backend bash
+docker-compose exec frontend bash
+
+# Alles löschen
+docker-compose down
+```
+
+## 📞 Support
+
+Logs anschauen:
+```bash
+docker-compose logs backend
+docker-compose logs frontend
+docker-compose logs db
+```
+
+API testen:
+```bash
+curl http://localhost:8000/health
+```
+
+Alles fertig? Viel Erfolg bei der Jobsuche! 🎯

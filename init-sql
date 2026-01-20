@@ -1,0 +1,73 @@
+-- Job Aggregator Database Initialization Script
+
+-- Create users table
+CREATE TABLE IF NOT EXISTS users (
+    id SERIAL PRIMARY KEY,
+    username VARCHAR(255) UNIQUE NOT NULL,
+    email VARCHAR(255) UNIQUE NOT NULL,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
+-- Create job_searches table
+CREATE TABLE IF NOT EXISTS job_searches (
+    id SERIAL PRIMARY KEY,
+    title VARCHAR(255) NOT NULL,
+    location VARCHAR(255) NOT NULL,
+    radius INTEGER DEFAULT 25,
+    schedule_time VARCHAR(5) NOT NULL,
+    is_active BOOLEAN DEFAULT TRUE,
+    last_search TIMESTAMP,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
+-- Create indexes for job_searches
+CREATE INDEX idx_job_searches_active ON job_searches(is_active);
+CREATE INDEX idx_job_searches_title ON job_searches(title);
+CREATE INDEX idx_job_searches_location ON job_searches(location);
+
+-- Create jobs table
+CREATE TABLE IF NOT EXISTS jobs (
+    id SERIAL PRIMARY KEY,
+    title VARCHAR(255) NOT NULL,
+    company VARCHAR(255),
+    location VARCHAR(255),
+    description TEXT,
+    url VARCHAR(1000) UNIQUE NOT NULL,
+    source VARCHAR(100) NOT NULL,
+    salary VARCHAR(255),
+    job_type VARCHAR(100),
+    posted_date TIMESTAMP,
+    found_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    search_id INTEGER REFERENCES job_searches(id) ON DELETE SET NULL
+);
+
+-- Create indexes for jobs
+CREATE INDEX idx_jobs_title ON jobs(title);
+CREATE INDEX idx_jobs_location ON jobs(location);
+CREATE INDEX idx_jobs_source ON jobs(source);
+CREATE INDEX idx_jobs_found_at ON jobs(found_at);
+CREATE INDEX idx_jobs_search_id ON jobs(search_id);
+CREATE INDEX idx_jobs_url ON jobs(url);
+
+-- Create view for recent jobs
+CREATE OR REPLACE VIEW recent_jobs AS
+SELECT 
+    j.id,
+    j.title,
+    j.company,
+    j.location,
+    j.url,
+    j.source,
+    j.salary,
+    j.job_type,
+    j.posted_date,
+    j.found_at,
+    js.title as search_title
+FROM jobs j
+LEFT JOIN job_searches js ON j.search_id = js.id
+WHERE j.found_at > CURRENT_TIMESTAMP - INTERVAL '7 days'
+ORDER BY j.found_at DESC;
+
+-- Verify tables
+SELECT table_name FROM information_schema.tables WHERE table_schema = 'public';
