@@ -1,0 +1,14 @@
+__pycache__/
+*.py[cod]
+*.egg-info/
+*.db
+logs/
+node_modules/
+npm-debug.log*
+.env
+.vscode/
+.idea/
+*.swp
+.DS_Store
+dist/
+build/

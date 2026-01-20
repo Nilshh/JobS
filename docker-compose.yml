@@ -1,0 +1,48 @@
+services:
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: jobs-backend
+    environment:
+      - FLASK_ENV=production
+      - FLASK_APP=app.py
+      - DATABASE_URL=sqlite:///database.db
+      - ARBEITSAGENTUR_CLIENT_ID=${ARBEITSAGENTUR_CLIENT_ID:-jobboerse-jobsuche}
+      - INDEED_API_KEY=${INDEED_API_KEY}
+      - STEPSTONE_API_KEY=${STEPSTONE_API_KEY}
+      - LINKEDIN_API_KEY=${LINKEDIN_API_KEY}
+      - XING_API_KEY=${XING_API_KEY}
+    ports:
+      - "5000:5000"
+    volumes:
+      - ./backend/database.db:/app/database.db
+      - ./backend/logs:/app/logs
+    networks:
+      - jobs-network
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:5000/api/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+      args:
+        - REACT_APP_API_BASE_URL=http://localhost:5000/api
+    container_name: jobs-frontend
+    ports:
+      - "3000:80"
+    depends_on:
+      - backend
+    networks:
+      - jobs-network
+    restart: unless-stopped
+
+networks:
+  jobs-network:
+    driver: bridge
